@@ -1,5 +1,5 @@
 /* ぴょんぴょんラビット - オフライン用サービスワーカー */
-const CACHE = "pyonrabi-v1"; // 更新時はここの数字を上げる (v2, v3...)
+const CACHE = "pyonrabi-v2"; // 更新時はここの数字を上げる (v2, v3...)
 const ASSETS = [
   "./",
   "./index.html",
