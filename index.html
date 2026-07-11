@@ -62,11 +62,11 @@
   .keys{
     display:flex;align-items:center;gap:18px;margin-top:2px;padding:4px 6px 6px;
   }
-  .dpad{display:flex;gap:8px;}
-  /* すべてのボタン共通: 文字選択・長押しメニュー・ダブルタップ拡大を無効化 */
+  .dpad{display:flex;gap:22px;}
+  /* すべてのボタン共通: 文字選択・長押しメニュー・スクロール横取りを無効化 */
   button{
     user-select:none; -webkit-user-select:none; -moz-user-select:none;
-    -webkit-touch-callout:none; touch-action:manipulation;
+    -webkit-touch-callout:none; touch-action:none;
   }
   button.key{
     border:none;border-radius:12px;cursor:pointer;
@@ -118,7 +118,7 @@
     </div>
     <button class="key jump" id="btnJ">ジャンプ</button>
   </div>
-  <div class="hint">←→移動 / Z・スペース:ジャンプ / R:やりなおし / M・♪:BGM</div>
+  <div class="hint">←→移動 / Z・スペース:ジャンプ / R:やりなおし・セレクト / M:BGM</div>
 </div>
 
 <script>
@@ -313,13 +313,29 @@ const LEVELS = [
 ];
 
 /* ---------- 入力 ---------- */
-const input = {left:false,right:false,jump:false,jumpEdge:false};
+const input = {left:false,right:false,jump:false,jumpEdge:false,jumpBuf:0};
+const JUMP_BUFFER = 7; // 着地直前に押しても数フレームは受け付ける
+function pressJump(){
+  if(!input.jump) input.jumpBuf = JUMP_BUFFER; // 押した瞬間だけバッファに記憶
+  input.jump = true;
+}
 // タップで文字が選択されるのを保険で解除
 document.querySelector(".phone").addEventListener("selectstart", e=>e.preventDefault());
 function clearSel(){ const s=window.getSelection && window.getSelection(); if(s && s.removeAllRanges) s.removeAllRanges(); }
 
 function bindHold(el, prop){
-  const on = e=>{e.preventDefault(); clearSel(); if(prop==="jump" && !input.jump) input.jumpEdge=true; input[prop]=true; el.classList.add("pressed");};
+  const on = e=>{
+    e.preventDefault(); clearSel();
+    if(game.state==="select"){
+      if(prop==="left") moveSel(-1);
+      else if(prop==="right") moveSel(1);
+      else if(prop==="jump") chooseSel();
+      return;
+    }
+    if(prop==="jump") pressJump();
+    else input[prop]=true;
+    el.classList.add("pressed");
+  };
   const off= e=>{e.preventDefault(); input[prop]=false; el.classList.remove("pressed");};
   el.addEventListener("pointerdown",on);
   el.addEventListener("pointerup",off);
@@ -330,12 +346,24 @@ bindHold(document.getElementById("btnL"),"left");
 bindHold(document.getElementById("btnR"),"right");
 bindHold(document.getElementById("btnJ"),"jump");
 addEventListener("keydown",e=>{
-  if(["ArrowLeft","ArrowRight","ArrowUp"," ","z","Z","r","R","m","M"].includes(e.key)) e.preventDefault();
+  if(["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"," ","z","Z","r","R","m","M"].includes(e.key)) e.preventDefault();
+  if(e.key==="m"||e.key==="M"){ BGM.toggle(); return; }
+  // ステージセレクト操作
+  if(game.state==="select"){
+    if(e.key==="ArrowLeft") moveSel(-1);
+    else if(e.key==="ArrowRight") moveSel(1);
+    else if(e.key==="ArrowUp") moveSel(-SEL_COLS);
+    else if(e.key==="ArrowDown") moveSel(SEL_COLS);
+    else if(e.key===" "||e.key==="z"||e.key==="Z"||e.key==="Enter") chooseSel();
+    return;
+  }
   if(e.key==="ArrowLeft") input.left=true;
   if(e.key==="ArrowRight") input.right=true;
-  if(e.key==="ArrowUp"||e.key===" "||e.key==="z"||e.key==="Z"){ if(!input.jump) input.jumpEdge=true; input.jump=true; }
-  if((e.key==="r"||e.key==="R") && game.state==="play") killPlayer(true);
-  if(e.key==="m"||e.key==="M") BGM.toggle();
+  if(e.key==="ArrowUp"||e.key===" "||e.key==="z"||e.key==="Z") pressJump();
+  if(e.key==="r"||e.key==="R"){
+    if(game.state==="play") killPlayer(true);
+    else enterSelect();               // タイトル/クリア画面などからセレクトへ
+  }
   if(game.state!=="play" && (e.key===" "||e.key==="z"||e.key==="Z"||e.key==="Enter")) advance();
 });
 addEventListener("keyup",e=>{
@@ -343,7 +371,21 @@ addEventListener("keyup",e=>{
   if(e.key==="ArrowRight") input.right=false;
   if(e.key==="ArrowUp"||e.key===" "||e.key==="z"||e.key==="Z") input.jump=false;
 });
-cv.addEventListener("pointerdown",()=>{ if(game.state!=="play") advance(); });
+function canvasPos(e){
+  const r=cv.getBoundingClientRect();
+  return { x:(e.clientX-r.left)/r.width*240, y:(e.clientY-r.top)/r.height*240 };
+}
+cv.addEventListener("pointerdown",e=>{
+  if(game.state==="select"){
+    const p=canvasPos(e);
+    for(let i=0;i<LEVELS.length;i++){
+      const r=cellRect(i);
+      if(p.x>=r.x&&p.x<=r.x+r.w&&p.y>=r.y&&p.y<=r.y+r.h){ game.selCursor=i; chooseSel(); return; }
+    }
+    return;
+  }
+  if(game.state!=="play") advance();
+});
 
 /* ---------- サウンド(短いビープ) ---------- */
 let AC=null;
@@ -422,10 +464,25 @@ document.getElementById("btnM").addEventListener("pointerdown",e=>{e.preventDefa
 
 /* ---------- ゲーム状態 ---------- */
 const game = {
-  state:"title",   // title | play | dead | clear | allclear
+  state:"title",   // title | select | play | dead | clear | allclear
   stage:0, deaths:0, frames:0, stageFrames:0,
   bestClear:{},
+  unlocked:0,      // あそべる最大ステージindex (0=ステージ1のみ)
+  selCursor:0,     // セレクト画面のカーソル位置
 };
+/* ---------- 進行状況の保存(GitHub Pagesなどのhttpで有効) ---------- */
+const SAVE_KEY="pyonrabi_save_v1";
+function loadSave(){
+  try{
+    const s=JSON.parse(localStorage.getItem(SAVE_KEY));
+    if(s){ game.unlocked=s.unlocked||0; game.bestClear=s.bestClear||{}; }
+  }catch(e){}
+}
+function persist(){
+  try{
+    localStorage.setItem(SAVE_KEY, JSON.stringify({unlocked:game.unlocked, bestClear:game.bestClear}));
+  }catch(e){}
+}
 let grid=[], gw=0, gh=0, birds=[], blues=[], switches=[], toggleOn=true;
 let spawn={x:0,y:0}, goal={x:0,y:0};
 const player={x:0,y:0,vx:0,vy:0,w:11,h:13,onGround:false,face:1,coyote:0,dead:0,anim:0};
@@ -491,12 +548,39 @@ function stageClear(){
   game.state="clear"; clearTimer=0;
   const t = game.stageFrames;
   if(!(game.stage in game.bestClear) || t < game.bestClear[game.stage]) game.bestClear[game.stage]=t;
+  if(game.stage+1 < LEVELS.length) game.unlocked = Math.max(game.unlocked, game.stage+1);
+  persist();
   [660,880,990,1320].forEach((f,i)=>setTimeout(()=>beep(f,.12,"square",.07),i*110));
 }
+/* ---------- ステージセレクト ---------- */
+const SEL_COLS=5, SEL_MX=14, SEL_TOP=74, SEL_GAP=6, SEL_ROWGAP=16, SEL_CH=50;
+function cellRect(i){
+  const col=i%SEL_COLS, row=(i/SEL_COLS)|0;
+  const cw=(240-SEL_MX*2-SEL_GAP*(SEL_COLS-1))/SEL_COLS;
+  return { x:SEL_MX+col*(cw+SEL_GAP), y:SEL_TOP+row*(SEL_CH+SEL_ROWGAP), w:cw, h:SEL_CH };
+}
+function enterSelect(){
+  game.state="select";
+  game.selCursor=Math.min(game.unlocked, LEVELS.length-1);
+  beep(700,.06);
+}
+function startStage(n){
+  game.stage=n; game.deaths=0; loadStage(n); game.state="play";
+  beep(880,.08); BGM.start();
+}
+function moveSel(d){
+  const n=game.selCursor+d;
+  if(n<0||n>=LEVELS.length) return;
+  game.selCursor=n; beep(640,.03,"square",.04);
+}
+function chooseSel(){
+  if(game.selCursor<=game.unlocked) startStage(game.selCursor);
+  else beep(170,.14,"sawtooth",.06); // まだロック中
+}
 function advance(){
-  if(game.state==="title"){ game.stage=0; game.deaths=0; loadStage(0); game.state="play"; beep(880,.08); BGM.start(); }
+  if(game.state==="title"){ enterSelect(); }
   else if(game.state==="clear"){
-    if(game.stage+1<LEVELS.length){ game.stage++; loadStage(game.stage); game.state="play"; beep(880,.08); }
+    if(game.stage+1<LEVELS.length){ startStage(game.stage+1); }
     else game.state="allclear";
   }
   else if(game.state==="allclear"){ game.state="title"; }
@@ -509,7 +593,7 @@ function update(){
     if(deadTimer>45){ game.state="play"; respawn(); }
     return;
   }
-  if(game.state!=="play"){ input.jumpEdge=false; return; }
+  if(game.state!=="play"){ input.jumpEdge=false; input.jumpBuf=0; return; }
   game.stageFrames++;
 
   // 移動
@@ -519,8 +603,9 @@ function update(){
   else player.vx=0;
 
   if(player.onGround) player.coyote=6; else if(player.coyote>0) player.coyote--;
-  if(input.jumpEdge && player.coyote>0){
-    player.vy=JUMP; player.onGround=false; player.coyote=0;
+  if(input.jumpBuf>0) input.jumpBuf--;
+  if(input.jumpBuf>0 && player.coyote>0){
+    player.vy=JUMP; player.onGround=false; player.coyote=0; input.jumpBuf=0;
     beep(740,.09,"square",.05);
   }
   input.jumpEdge=false;
@@ -611,6 +696,7 @@ function draw(){
   cx.fillStyle=sky; cx.fillRect(0,0,240,240);
 
   if(game.state==="title"){ drawTitle(); return; }
+  if(game.state==="select"){ drawSelect(); return; }
 
   // 雲(視差)
   cx.fillStyle="rgba(255,255,255,.85)";
@@ -789,9 +875,73 @@ function drawTitle(){
   cx.fillText("- じさく ガラケーふう アクション -",120,108);
   if(f%60<40){
     cx.fillStyle="#e63946"; cx.font="bold 11px sans-serif";
-    cx.fillText("ジャンプボタンで スタート！",120,150);
+    cx.fillText("ジャンプボタンで ステージセレクト",120,150);
   }
   cx.textAlign="left";
+}
+/* ---------- ステージセレクト画面 ---------- */
+function drawLock(cx0,cy0){
+  cx.fillStyle="#5c6472";
+  cx.fillRect(cx0-5,cy0-1,10,8);           // 本体
+  cx.strokeStyle="#5c6472"; cx.lineWidth=2;
+  cx.beginPath(); cx.arc(cx0,cy0-1,4,Math.PI,0); cx.stroke(); // つる
+  cx.fillStyle="#2b3038"; cx.fillRect(cx0-1,cy0+2,2,3);       // 鍵穴
+}
+function drawSelect(){
+  const f=game.frames;
+  cx.fillStyle="rgba(255,255,255,.85)";
+  cloud(50,30); cloud(180,52); cloud(120,150);
+  cx.fillStyle="#3fae4e"; cx.fillRect(0,220,240,20);
+  cx.fillStyle="#61cf6e"; cx.fillRect(0,220,240,3);
+
+  cx.textAlign="center";
+  cx.fillStyle="#1d3557"; cx.font="bold 15px sans-serif";
+  cx.fillText("ステージ セレクト",120,26);
+  cx.font="8px monospace"; cx.fillStyle="#456";
+  cx.fillText("クリアで つぎが かいほう",120,42);
+
+  for(let i=0;i<LEVELS.length;i++){
+    const r=cellRect(i);
+    const unlocked = i<=game.unlocked;
+    const cleared = (i in game.bestClear);
+    const sel = i===game.selCursor;
+    // セル背景
+    cx.fillStyle = unlocked ? (cleared ? "#ffd23f" : "#fff") : "#b9c0cc";
+    roundRect(r.x,r.y,r.w,r.h,6); cx.fill();
+    // カーソル枠
+    if(sel){
+      cx.lineWidth = 2 + (Math.sin(f*.2)+1);
+      cx.strokeStyle = "#e6394f";
+      roundRect(r.x-1,r.y-1,r.w+2,r.h+2,7); cx.stroke();
+    }
+    const midx=r.x+r.w/2;
+    if(unlocked){
+      cx.fillStyle="#2b3a67"; cx.font="bold 18px sans-serif";
+      cx.fillText(String(i+1), midx, r.y+22);
+      if(cleared){
+        cx.fillStyle="#e6a100"; cx.font="9px sans-serif";
+        cx.fillText("★"+timeStr(game.bestClear[i]), midx, r.y+40);
+      }else{
+        cx.fillStyle="#7a8699"; cx.font="8px monospace";
+        cx.fillText("NEW", midx, r.y+40);
+      }
+    }else{
+      drawLock(midx, r.y+22);
+    }
+  }
+
+  cx.fillStyle="#456"; cx.font="8px monospace";
+  cx.fillText("◀▶で えらぶ / ジャンプで けってい", 120, 214);
+  cx.textAlign="left";
+}
+function roundRect(x,y,w,h,rad){
+  cx.beginPath();
+  cx.moveTo(x+rad,y);
+  cx.arcTo(x+w,y,x+w,y+h,rad);
+  cx.arcTo(x+w,y+h,x,y+h,rad);
+  cx.arcTo(x,y+h,x,y,rad);
+  cx.arcTo(x,y,x+w,y,rad);
+  cx.closePath();
 }
 function drawClear(){
   clearTimer++;
@@ -802,7 +952,7 @@ function drawClear(){
   cx.fillStyle="#fff"; cx.font="9px monospace";
   cx.fillText("タイム "+timeStr(game.stageFrames)+"  (じこベスト "+timeStr(game.bestClear[game.stage])+")",120,128);
   if(clearTimer>30 && game.frames%50<35){
-    cx.fillText(game.stage+1<LEVELS.length?"ジャンプで つぎへ":"ジャンプで けっかへ",120,144);
+    cx.fillText(game.stage+1<LEVELS.length?"ジャンプで つぎへ  (R:セレクト)":"ジャンプで けっかへ",120,144);
   }
   cx.textAlign="left";
 }
@@ -825,6 +975,7 @@ function drawAllClear(){
 }
 
 /* ---------- ループ ---------- */
+loadSave();
 let last=0, acc=0;
 function loop(t){
   requestAnimationFrame(loop);
