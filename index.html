@@ -55,11 +55,19 @@
     display:block;image-rendering:pixelated;image-rendering:crisp-edges;
     background:var(--lcd-off);
     border-radius:4px;
+    /* 内部解像度は240pxのまま、表示だけ拡大 */
+    width:min(86vw, 62vh, 420px);
+    height:min(86vw, 62vh, 420px);
   }
   .keys{
     display:flex;align-items:center;gap:18px;margin-top:2px;padding:4px 6px 6px;
   }
   .dpad{display:flex;gap:8px;}
+  /* すべてのボタン共通: 文字選択・長押しメニュー・ダブルタップ拡大を無効化 */
+  button{
+    user-select:none; -webkit-user-select:none; -moz-user-select:none;
+    -webkit-touch-callout:none; touch-action:manipulation;
+  }
   button.key{
     border:none;border-radius:12px;cursor:pointer;
     background:linear-gradient(#fbf8ef,var(--key));
@@ -90,8 +98,11 @@
     box-shadow:0 2px 0 #b28f14;vertical-align:middle;
   }
   #btnM.off{filter:grayscale(1);opacity:.5;}
-  @media (max-height:720px){
-    .phone{transform:scale(.88);}
+  @media (max-height:820px){
+    .phone{transform:scale(.92);}
+  }
+  @media (max-height:680px){
+    .phone{transform:scale(.82);}
   }
 </style>
 </head>
@@ -303,8 +314,12 @@ const LEVELS = [
 
 /* ---------- 入力 ---------- */
 const input = {left:false,right:false,jump:false,jumpEdge:false};
+// タップで文字が選択されるのを保険で解除
+document.querySelector(".phone").addEventListener("selectstart", e=>e.preventDefault());
+function clearSel(){ const s=window.getSelection && window.getSelection(); if(s && s.removeAllRanges) s.removeAllRanges(); }
+
 function bindHold(el, prop){
-  const on = e=>{e.preventDefault(); if(prop==="jump" && !input.jump) input.jumpEdge=true; input[prop]=true; el.classList.add("pressed");};
+  const on = e=>{e.preventDefault(); clearSel(); if(prop==="jump" && !input.jump) input.jumpEdge=true; input[prop]=true; el.classList.add("pressed");};
   const off= e=>{e.preventDefault(); input[prop]=false; el.classList.remove("pressed");};
   el.addEventListener("pointerdown",on);
   el.addEventListener("pointerup",off);
